@@ -1,0 +1,193 @@
+# MRI Synthesis Configuration File
+# This file contains all configurable parameters for training and inference
+
+# ============================================================================
+# Dataset Configuration
+# ============================================================================
+dataset:
+  name: 'brats'  # Options: 'brats', 'ixi', 'UCSF', 'UPENN'
+  
+  # Dataset paths - Update these to point to your data
+  paths:
+    brats:
+      train: "/path/to/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/train/"
+      val: "/path/to/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/val/"
+      test: "/path/to/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/test/"
+    
+    ixi:
+      train: "/path/to/IXI-Dataset-npy/train"
+      val: "/path/to/IXI-Dataset-npy/val"
+      test: "/path/to/IXI-Dataset-npy/test"
+    
+    UCSF:
+      train: "/path/to/UCSF/train"
+      val: "/path/to/UCSF/val"
+      test: "/path/to/UCSF/test"
+    
+    UPENN:
+      train: "/path/to/UPENN/train"
+      val: "/path/to/UPENN/val"
+      test: "/path/to/UPENN/test"
+  
+  # Image preprocessing
+  img_size: [256, 256]
+
+# ============================================================================
+# Model Configuration
+# ============================================================================
+model:
+  # Model architecture - Options: XL, L, B, S with patch sizes 2, 4, 8
+  # Format: {SIZE}_{PATCH_SIZE} (e.g., S_2, B_4, L_8)
+  architecture: 'S_2'
+  
+  # Model parameters (automatically set based on architecture, but can override)
+  depth: 12           # Number of transformer blocks
+  hidden_size: 384    # Hidden dimension
+  patch_size: 2       # Patch size for image tokenization
+  num_heads: 6        # Number of attention heads
+  mlp_ratio: 4.0      # MLP expansion ratio
+  
+  # Input/output settings
+  input_size: 64      # Latent space size (after VAE encoding)
+  in_channels: 3      # Number of input channels in latent space
+  num_modalities: 4   # Number of modalities (4 for BraTS, 3 for IXI)
+
+# ============================================================================
+# Training Configuration
+# ============================================================================
+training:
+  # Basic training parameters
+  epochs: 200
+  batch_size: 8
+  learning_rate: 1.0e-4
+  num_workers: 4
+  
+  # Learning rate schedule
+  scheduler:
+    milestones: [120]
+    gamma: 0.5
+  
+  # Model checkpointing
+  save_interval: 5        # Save model every N epochs
+  validate_interval: 5    # Run validation every N epochs
+  print_interval: 50      # Print loss every N steps
+  
+  # Continue training settings
+  continue_training: false
+  checkpoint_path: ''
+  reset_epoch: false      # If true, start from epoch 0 even when loading checkpoint
+  
+  # Parallelization
+  data_parallel: false
+  
+  # Diffusion parameters
+  eps: 1.0e-3            # Minimum timestep
+  T: 1.0                 # Maximum timestep
+  
+  # Random seed
+  seed: 42
+
+# ============================================================================
+# Inference Configuration
+# ============================================================================
+inference:
+  # ODE solver parameters
+  n_steps: 10            # Number of ODE solver steps (10-100)
+  sigma: 1.0             # Noise scaling factor (0.0 = deterministic, 1.0 = standard)
+  solver: 'heun'         # Options: 'euler', 'heun', 'rk4'
+  
+  # Evaluation settings
+  batch_size: 32
+  num_workers: 1
+  
+  # Output settings
+  save_generated_images: false
+  plot_interval: 40      # Plot reconstruction every N batches
+  
+  # Random seed for reproducibility
+  seed: 999
+  
+  # Modality combinations to test
+  # Format: [input_modalities, output_modality]
+  modality_tests:
+    brats:
+      '3to1':
+        - [['t1', 't1ce', 't2'], 'flair']
+        - [['t1', 't1ce', 'flair'], 't2']
+        - [['t1', 't2', 'flair'], 't1ce']
+        - [['t2', 't1ce', 'flair'], 't1']
+      
+      '2to1':
+        - [['t1', 't2'], 'flair']
+        - [['t2', 'flair'], 't1']
+        - [['t1', 'flair'], 't2']
+      
+      '1to1':
+        - [['t1'], 'flair']
+        - [['t2'], 'flair']
+        - [['flair'], 't1']
+        - [['flair'], 't2']
+        - [['t1'], 't2']
+        - [['t2'], 't1']
+    
+    ixi:
+      '2to1':
+        - [['pd', 't2'], 't1']
+        - [['t1', 't2'], 'pd']
+        - [['pd', 't1'], 't2']
+      
+      '1to1':
+        - [['pd'], 't1']
+        - [['t1'], 'pd']
+        - [['t2'], 't1']
+        - [['t2'], 'pd']
+        - [['t1'], 't2']
+        - [['pd'], 't2']
+
+# ============================================================================
+# Output Paths
+# ============================================================================
+paths:
+  # Training outputs
+  checkpoints: './checkpoints'
+  validation_outputs: './outputs/validation'
+  
+  # Inference outputs
+  inference_outputs: './outputs/inference'
+  
+  # Logs
+  logs: './logs'
+
+# ============================================================================
+# MedVAE Configuration
+# ============================================================================
+medvae:
+  model_name: "medvae_4_3_2d"
+  modality: "mri"
+
+# ============================================================================
+# Modality Mappings
+# ============================================================================
+modalities:
+  brats:
+    t1: 0
+    t1ce: 1
+    t2: 2
+    flair: 3
+  
+  ixi:
+    pd: 0
+    t1: 1
+    t2: 2
+  
+  UCSF:
+    t1: 0
+    t1ce: 1
+    t2: 2
+    flair: 3
+  
+  UPENN:
+    t1: 0
+    t1ce: 1
+    t2: 2
+    flair: 3
