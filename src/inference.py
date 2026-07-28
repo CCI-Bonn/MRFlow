@@ -33,9 +33,8 @@ import lpips
 from torchmetrics.image.fid import FrechetInceptionDistance
 
 from dataloader import MyDataset
-from model import DiT
 from medvae import MVAE
-from utils import load_config, get_dataset_paths
+from utils import load_config, get_dataset_paths, create_model
 
 
 # Initialize MedVAE for latent encoding/decoding
@@ -47,8 +46,6 @@ MEDVAE.requires_grad_(False)
 # Modality mappings for label display
 MODALITY_MAPPING_BRATS = {"t1": 0, "t1ce": 1, "t2": 2, "flair": 3}
 MODALITY_MAPPING_IXI = {'pd': 0, 't1': 1, 't2': 2}
-
-MODALITIES = None  # Global variable set during inference
 
 
 # =============================================================================
@@ -119,7 +116,7 @@ def plot_reconstructions(
         axes = [axes]
 
     # Get input labels
-    input_labels = [label for label, oh in zip(MODALITIES, one_hot_input_mod) if oh == 1]
+    input_labels = [label for label, oh in zip(labels, one_hot_input_mod) if oh == 1]
     
     # Plot input modalities
     for j in range(num_inputs):
@@ -619,18 +616,11 @@ def infer(
     assert checkpoint_path is not None, "Please provide a checkpoint path."
     assert dataset_name in ['brats', 'ixi', 'UCSF', 'UPENN'], \
         f"Invalid dataset name: {dataset_name}"
+    assert config is not None, "Please provide a config dict (needed to build the model)."
 
-    # Initialize model
-    model = DiT(
-        depth=12,
-        hidden_size=384,
-        patch_size=2,
-        num_heads=6,
-        input_size=64,
-        in_channels=3,
-        dataset_name=dataset_name
-    )
-    
+    # Initialize model (architecture, input_size, in_channels come from config['model'])
+    model = create_model(config, dataset_name=dataset_name)
+
     # Load checkpoint
     checkpoint = torch.load(checkpoint_path, map_location='cuda')
     model.load_state_dict(checkpoint["model"])
@@ -646,23 +636,12 @@ def infer(
     print(f'Input: {input_modalities} → Output: {output_modality}')
 
     # Get test dataset path
-    if config:
-        dataset_paths = get_dataset_paths(config, dataset_name)
-        test_root = dataset_paths['test']
-    else:
-        # Fallback to hardcoded paths if no config
-        dataset_roots = {
-            'brats': "/path/to/BraTS/test/",
-            'ixi': "/path/to/IXI/test",
-            'UCSF': "/path/to/UCSF/test",
-            'UPENN': "/path/to/UPENN/test",
-        }
-        test_root = dataset_roots[dataset_name]
+    test_root = get_dataset_paths(config, dataset_name)['test']
 
     # Create test dataset
     test_dataset = MyDataset(
         root=test_root,
-        img_size=(256, 256),
+        img_size=tuple(config['dataset']['img_size']),
         testing=True,
         input_modalities=input_modalities,
         output_modality=output_modality,
@@ -671,19 +650,23 @@ def infer(
 
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=32,
+        batch_size=config['inference']['batch_size'],
         shuffle=False,
-        num_workers=1,
+        num_workers=config['inference']['num_workers'],
         pin_memory=True
     )
 
     print(f'Test samples: {len(test_dataset)}\n')
 
+    # Select ODE solver
+    solver_name = config['inference']['solver']
+    ode_solver = {'euler': euler_ode, 'heun': heun_ode, 'rk4': rk4_ode}[solver_name]
+
     # Run evaluation
     evaluate(
         model, test_dataloader, device, output_modality,
         sigma=sigma,
-        ode_solver=heun_ode,
+        ode_solver=ode_solver,
         save_dir=save_dir,
         plot_after=plot_after,
         target_modality=target_modality,
@@ -746,14 +729,7 @@ def main():
     seed = config['inference']['seed']
     torch.manual_seed(seed)
     np.random.seed(seed)
-    
-    # Set global MODALITIES variable
-    global MODALITIES
-    if args.dataset in ['brats', 'UCSF', 'UPENN']:
-        MODALITIES = list(MODALITY_MAPPING_BRATS.keys())
-    else:
-        MODALITIES = list(MODALITY_MAPPING_IXI.keys())
-    
+
     # Get modality combinations to test
     modality_tests = config['inference']['modality_tests'][args.dataset]
     modalities_list = []

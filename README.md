@@ -10,14 +10,16 @@ This project implements a conditional diffusion model that operates in the laten
 - **Cross-Attention Fusion**: Integrates multiple input modalities
 - **Flexible Input/Output**: Supports any combination of input/output modalities
 
+See [`demo_generation_trajectory.ipynb`](demo_generation_trajectory.ipynb) for a walkthrough that generates a missing modality directly from raw `.nii.gz` files and visualizes the rectified-flow trajectory from `t=0` (noise) to `t=1` (final image).
+
 ### Supported Datasets
 
-| Dataset | Modalities | Resolution | Use Case |
-|---------|-----------|------------|----------|
-| **BraTS** | T1, T1CE, T2, FLAIR (4) | Variable | Brain tumor segmentation |
-| **IXI** | PD, T1, T2 (3) | Variable | Normal brain imaging |
-| **UCSF** | T1, T1CE, T2, FLAIR (4) | Variable | Clinical brain imaging |
-| **UPENN** | T1, T1CE, T2, FLAIR (4) | Variable | Clinical brain imaging |
+| Dataset | Modalities | Resolution | Use Case | Status |
+|---------|-----------|------------|----------|--------|
+| **BraTS** | T1, T1CE, T2, FLAIR (4) | Variable | Brain tumor segmentation | Trained checkpoint provided (`checkpoints/brats.pth`) |
+| **IXI** | PD, T1, T2 (3) | Variable | Normal brain imaging | Trained checkpoint provided (`checkpoints/ixi.pth`), not independently verified |
+| **UCSF** | T1, T1CE, T2, FLAIR (4) | Variable | Clinical brain imaging | Supported by the dataloader/model, but no checkpoint has been trained |
+| **UPENN** | T1, T1CE, T2, FLAIR (4) | Variable | Clinical brain imaging | Supported by the dataloader/model, but no checkpoint has been trained |
 
 ## 📋 Requirements
 
@@ -33,9 +35,9 @@ This project implements a conditional diffusion model that operates in the laten
 git clone https://github.com/yourusername/mri-synthesis.git
 cd mri-synthesis
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Create a conda environment (or use `python -m venv venv` instead)
+conda create -n MRI_Gen python=3.10
+conda activate MRI_Gen
 
 # Install dependencies
 pip install -r requirements.txt
@@ -52,11 +54,12 @@ mri_synthesis_project/
 │   ├── dataloader.py            # Dataset loading and preprocessing
 │   ├── train.py                 # Training script
 │   ├── inference.py             # Inference and evaluation script
-│   └── utils.py                 # Utility functions
-├── checkpoints/                 # Saved model checkpoints
+│   └── utils.py                 # Config loading + model factory shared by train.py/inference.py
+├── checkpoints/                 # Saved model checkpoints (brats.pth, ixi.pth)
 ├── outputs/
 │   ├── validation/              # Validation outputs during training
 │   └── inference/               # Test results
+├── demo_generation_trajectory.ipynb  # Notebook: generate a modality from raw NIfTI, visualize t=0->t=1
 ├── requirements.txt
 └── README.md
 ```
@@ -141,23 +144,30 @@ dataset:
   img_size: [256, 256]
 
 model:
-  architecture: 'S_2'  # Options: S_2, B_2, L_2, XL_2, etc.
-  
+  architecture: 'S_2'  # Only S_2 has a trained checkpoint; see "Model Architectures" below
+
 training:
   epochs: 200
   batch_size: 8
   learning_rate: 1.0e-4
+  eps: 1.0e-3     # rectified-flow minimum timestep
+  T: 1.0          # rectified-flow maximum timestep
+  t_scale: 999.0  # timestep scaling factor fed into the model
   seed: 42
 ```
 
 ### Model Architectures
 
-| Architecture | Depth | Hidden Size | Parameters | VRAM (approx) |
-|--------------|-------|-------------|------------|---------------|
-| S_2 | 12 | 384 | ~20M | ~8GB |
-| B_2 | 12 | 768 | ~80M | ~12GB |
-| L_2 | 24 | 1024 | ~300M | ~20GB |
-| XL_2 | 28 | 1152 | ~600M | ~32GB |
+`model.py` defines the full DiT size family below (`{SIZE}_{PATCH_SIZE}`, used as `config.model.architecture`), but **only `S_2` has actually been trained** — that's the architecture behind both provided checkpoints (`checkpoints/brats.pth`, `checkpoints/ixi.pth`). The others are implemented and can be trained with `train.py`, but come with no checkpoint and haven't been validated by us.
+
+| Architecture | Depth | Hidden Size | Parameters (BraTS, 4 modalities) | Status |
+|--------------|-------|-------------|-----------------------------------|--------|
+| S_2 | 12 | 384 | 38.2M | **Trained** — checkpoints provided |
+| B_2 | 12 | 768 | 151.6M | Untrained — implemented, feel free to try |
+| L_2 | 24 | 1024 | 495.7M | Untrained — implemented, feel free to try |
+| XL_2 | 28 | 1152 | 722.7M | Untrained — implemented, feel free to try |
+
+Patch sizes 4 and 8 (e.g. `S_4`, `B_8`) are also implemented for each size and follow the same "untrained, feel free to try" status.
 
 ## 🚀 Training
 
@@ -177,7 +187,7 @@ python src/train.py --config config/config.yaml --dataset ixi
 ```yaml
 training:
   continue_training: true
-  checkpoint_path: 'checkpoints/epoch_50_rectifiedFlow.pth'
+  checkpoint_path: 'checkpoints/brats/epoch_50_rectifiedFlow.pth'
   reset_epoch: false  # Set true to restart epoch counter
 ```
 
@@ -185,7 +195,7 @@ training:
 
 ### Monitor Training
 
-- **Checkpoints**: Saved every N epochs (configurable) in `checkpoints/`
+- **Checkpoints**: Saved every N epochs (configurable) in `checkpoints/<dataset_name>/` (e.g. `checkpoints/brats/`) — kept separate from the pretrained `checkpoints/brats.pth` / `checkpoints/ixi.pth` so a new training run never overwrites them
 - **Best Model**: Automatically saved as `best.pth` based on validation loss
 - **Visualizations**: Generated during validation in `outputs/validation/`
 - **Logs**: Printed to console with loss, metrics, and progress
@@ -205,7 +215,7 @@ training:
 python src/inference.py \
     --config config/config.yaml \
     --dataset brats \
-    --checkpoint checkpoints/best.pth \
+    --checkpoint checkpoints/brats.pth \
     --n_steps 10 \
     --sigma 1.0
 ```
@@ -251,15 +261,20 @@ Input: T1, T1CE, T2    → Output: FLAIR     (3-to-1)
 Input: FLAIR           → Output: T2        (1-to-1)
 ```
 
-### Typical Performance (BraTS)
+### Example Measured Quality (BraTS, S_2 checkpoint)
+
+Measured by actually running `checkpoints/brats.pth` through `src/inference.py`'s evaluation
+pipeline on a small sample of real BraTS test slices (not a full benchmark run — just a
+sanity check that the pipeline produces sensible image quality):
 
 | Synthesis Task | PSNR ↑ | SSIM ↑ | LPIPS ↓ |
 |---------------|--------|--------|---------|
-| T1+T2→FLAIR | 25-28 | 0.85-0.90 | 0.10-0.15 |
-| T1+T1CE+T2→FLAIR | 27-30 | 0.88-0.92 | 0.08-0.12 |
-| FLAIR→T2 | 24-27 | 0.83-0.88 | 0.12-0.18 |
+| T1+T1CE+T2→FLAIR | 24.7 ± 1.8 | 0.87 ± 0.03 | 0.086 ± 0.016 |
 
-*Results vary based on dataset, model size, and training duration*
+For a full evaluation across every modality combination in `config.yaml`, run:
+```bash
+python src/inference.py --config config/config.yaml --dataset brats --checkpoint checkpoints/brats.pth
+```
 
 ## 🔧 Advanced Usage
 
@@ -330,19 +345,6 @@ Possible causes:
 4. Check data normalization
 ```
 
-## 📚 Citation
-
-If you use this code, please cite:
-
-```bibtex
-@article{your_paper,
-  title={Multi-Modal MRI Synthesis using Diffusion Transformers},
-  author={Your Name},
-  journal={Your Journal},
-  year={2024}
-}
-```
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please:
@@ -364,19 +366,13 @@ This project is licensed under the MIT License - see LICENSE file for details.
 - **Rectified Flow**: Optimal transport-based diffusion approach
 - **Dataset Providers**: BraTS, IXI, UCSF, UPENN for MRI data
 
-## 📞 Contact
-
-For questions or issues:
-- Open an issue on GitHub
-- Email: your.email@example.com
-
 ## 🗺️ Roadmap
 
 - [ ] 3D volume synthesis support
 - [ ] Additional modality types (CT, PET)
 - [ ] Conditional synthesis with clinical metadata
 - [ ] Web demo interface
-- [ ] Pre-trained model weights release
+- [ ] Train and validate the B/L/XL architectures (currently S_2-only)
 - [ ] Multi-GPU training support
 - [ ] Docker containerization
 

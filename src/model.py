@@ -16,13 +16,15 @@ from typing import Tuple
 import torch.nn as nn
 import numpy as np
 import math
+
+# Must run before importing timm: timm pulls in wandb (via timm.utils.summary),
+# and older wandb releases touch np.float_/np.complex_, which NumPy >=2.0 removed.
+np.float_ = np.float64
+np.complex_ = np.complex128
+
 from timm.models.vision_transformer import Attention as SelfAttention
 from timm.models.vision_transformer import PatchEmbed, Mlp
 import torch.nn.functional as F
-
-# Fix numpy deprecation warnings
-np.float_ = np.float64
-np.complex_ = np.complex128
 
 
 def modulate(x: Tensor, shift: Tensor, scale: Tensor) -> Tensor:
@@ -109,7 +111,7 @@ class DiTBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float = 4.0, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = SelfAttention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        self.final_attn = SelfAttention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
@@ -143,7 +145,7 @@ class DiTBlock(nn.Module):
             self.adaLN_modulation(c).chunk(6, dim=1)
         
         # Self-attention with adaLN
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_msa.unsqueeze(1) * self.final_attn(modulate(self.norm1(x), shift_msa, scale_msa))
         
         # MLP with adaLN
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))

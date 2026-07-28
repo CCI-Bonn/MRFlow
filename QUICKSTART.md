@@ -8,8 +8,7 @@ Get your MRI synthesis model running in 5 minutes!
 # Clone and setup
 git clone https://github.com/yourusername/mri-synthesis.git
 cd mri-synthesis
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+conda create -n MRI_Gen python=3.10 && conda activate MRI_Gen  # or `python -m venv venv`
 pip install -r requirements.txt
 ```
 
@@ -48,9 +47,11 @@ Monitor progress in terminal. Checkpoints saved to `checkpoints/`.
 python src/inference.py \
     --config config/config.yaml \
     --dataset brats \
-    --checkpoint checkpoints/best.pth \
+    --checkpoint checkpoints/brats.pth \
     --n_steps 10
 ```
+
+A trained `S_2` checkpoint is already provided at `checkpoints/brats.pth` (and `checkpoints/ixi.pth`), so you can run this step immediately without training first. See [`demo_generation_trajectory.ipynb`](demo_generation_trajectory.ipynb) for a notebook version that runs directly on raw `.nii.gz` files and visualizes the generation process step by step.
 
 Results saved to `outputs/inference/`.
 
@@ -64,10 +65,12 @@ Check `outputs/inference/`:
 ## Common Modifications
 
 ### Change Model Size
-Edit `config/config.yaml`:
+Only `S_2` (small) has an actual trained checkpoint (`checkpoints/brats.pth` / `checkpoints/ixi.pth`).
+`B_2`/`L_2`/`XL_2` are implemented in `model.py` and can be trained from scratch, but come with
+no pretrained weights:
 ```yaml
 model:
-  architecture: 'B_2'  # S_2 (small), B_2 (base), L_2 (large), XL_2 (xlarge)
+  architecture: 'B_2'  # S_2 (small, trained), B_2 (base), L_2 (large), XL_2 (xlarge) — untrained
 ```
 
 ### Reduce Memory Usage

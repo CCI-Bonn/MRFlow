@@ -1,11 +1,16 @@
-torch>=2.0.0
-torchvision>=0.15.0
+# Pinned exactly: newer torch releases (2.10+) default to cu13x wheels on PyPI,
+# which require an NVIDIA driver newer than many currently-deployed ones (CUDA 13
+# needs driver >=580; this repo has been validated against driver 570.x / CUDA 12.8).
+# If your driver supports a newer CUDA runtime, these can be relaxed.
+torch==2.9.0
+torchvision==0.24.0
 numpy>=1.24.0
 matplotlib>=3.7.0
 tqdm>=4.65.0
 Pillow>=9.5.0
 pyyaml>=6.0
 torchmetrics>=0.11.0
+torch-fidelity>=0.3.0  # required by torchmetrics' FrechetInceptionDistance (used in inference.py)
 lpips>=0.1.4
 medvae>=0.1.0
 timm>=0.9.0

@@ -251,10 +251,14 @@ class MyDataset(Dataset):
         # Create zero placeholder for missing modalities
         all_zeros = np.zeros_like(imgs[0], dtype=imgs[0].dtype)
 
-        # Build input modality slots
-        # Non-target modalities are shuffled to randomize slot ordering
+        # Build input modality slots.
+        # During training, non-target modalities are shuffled to randomize slot
+        # ordering. During testing, keep them in a fixed canonical order so
+        # generated visualizations/labels line up deterministically with the
+        # requested input_modalities/output_modality.
         non_target_modalities = [m for m in self.MODALITIES if m != output_modality]
-        random.shuffle(non_target_modalities)
+        if not self.testing:
+            random.shuffle(non_target_modalities)
 
         for mod in non_target_modalities:
             index = self.MODALITY_MAPPING[mod]

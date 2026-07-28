@@ -10,9 +10,9 @@ dataset:
   # Dataset paths - Update these to point to your data
   paths:
     brats:
-      train: "/path/to/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/train/"
-      val: "/path/to/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/val/"
-      test: "/path/to/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/test/"
+      train: "/raid/Users/mikhelson/baselines/brats24/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/train/"
+      val: "/raid/Users/mikhelson/baselines/brats24/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/val/"
+      test: "/raid/Users/mikhelson/baselines/brats24/ASNR-MICCAI-BraTS2023-GLI-Cleaned-350subj_npy/test/"
     
     ixi:
       train: "/path/to/IXI-Dataset-npy/train"
@@ -39,18 +39,21 @@ model:
   # Model architecture - Options: XL, L, B, S with patch sizes 2, 4, 8
   # Format: {SIZE}_{PATCH_SIZE} (e.g., S_2, B_4, L_8)
   architecture: 'S_2'
-  
-  # Model parameters (automatically set based on architecture, but can override)
+
+  # Informational only: depth/hidden_size/patch_size/num_heads/mlp_ratio are fully
+  # determined by `architecture` (see MODEL_REGISTRY in src/utils.py) and are not
+  # separately configurable here. Likewise num_modalities is derived from
+  # dataset.name (4 for brats/UCSF/UPENN, 3 for ixi), not read from this file.
   depth: 12           # Number of transformer blocks
   hidden_size: 384    # Hidden dimension
   patch_size: 2       # Patch size for image tokenization
   num_heads: 6        # Number of attention heads
   mlp_ratio: 4.0      # MLP expansion ratio
-  
-  # Input/output settings
+
+  # Input/output settings (these ARE used directly)
   input_size: 64      # Latent space size (after VAE encoding)
   in_channels: 3      # Number of input channels in latent space
-  num_modalities: 4   # Number of modalities (4 for BraTS, 3 for IXI)
+  num_modalities: 4   # Informational; actual value is derived from dataset.name
 
 # ============================================================================
 # Training Configuration
@@ -80,10 +83,11 @@ training:
   # Parallelization
   data_parallel: false
   
-  # Diffusion parameters
+  # Diffusion / rectified flow parameters
   eps: 1.0e-3            # Minimum timestep
   T: 1.0                 # Maximum timestep
-  
+  t_scale: 999.0         # Timestep scaling factor fed into the model (matches TimestepEmbedder's max_period=10000 convention)
+
   # Random seed
   seed: 42
 

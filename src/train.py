@@ -26,8 +26,7 @@ from torchmetrics.image.ssim import StructuralSimilarityIndexMeasure
 import lpips
 
 from dataloader import MyDataset
-from model import DiT, DiT_S_2, DiT_S_4, DiT_S_8, DiT_B_2, DiT_B_4, DiT_B_8
-from model import DiT_L_2, DiT_L_4, DiT_L_8, DiT_XL_2, DiT_XL_4, DiT_XL_8
+from utils import create_model
 from medvae import MVAE
 
 
@@ -46,34 +45,19 @@ def set_seed(seed):
 
 
 #################################################################################
-#                              Model Factory                                    #
-#################################################################################
-
-MODEL_REGISTRY = {
-    'DiT_S_2': DiT_S_2, 'DiT_S_4': DiT_S_4, 'DiT_S_8': DiT_S_8,
-    'DiT_B_2': DiT_B_2, 'DiT_B_4': DiT_B_4, 'DiT_B_8': DiT_B_8,
-    'DiT_L_2': DiT_L_2, 'DiT_L_4': DiT_L_4, 'DiT_L_8': DiT_L_8,
-    'DiT_XL_2': DiT_XL_2, 'DiT_XL_4': DiT_XL_4, 'DiT_XL_8': DiT_XL_8,
-}
-
-
-def create_model(config):
-    """Create model based on configuration."""
-    model_name = config['model']['name']
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"Unknown model: {model_name}")
-    
-    model_fn = MODEL_REGISTRY[model_name]
-    return model_fn(
-        input_size=config['model']['input_size'],
-        in_channels=config['model']['in_channels'],
-        dataset_name=config['dataset']['name']
-    )
-
-
-#################################################################################
 #                              Metrics                                          #
 #################################################################################
+
+# LPIPS loads a VGG backbone; instantiate once and reuse across validation batches
+_LPIPS_MODEL = None
+
+
+def _get_lpips_model(device):
+    global _LPIPS_MODEL
+    if _LPIPS_MODEL is None:
+        _LPIPS_MODEL = lpips.LPIPS(net='vgg').to(device)
+        _LPIPS_MODEL.eval()
+    return _LPIPS_MODEL
 
 def calculate_batch_psnr_torch(original, generated, max_val=1.0):
     """Calculate Peak Signal-to-Noise Ratio (PSNR) for a batch."""
@@ -96,8 +80,7 @@ def calculate_batch_l1_torch(original, generated):
 
 def calculate_batch_lpips(original, generated, device):
     """Calculate Learned Perceptual Image Patch Similarity (LPIPS) for a batch."""
-    lpips_model = lpips.LPIPS(net='vgg').to(device)
-    lpips_model.eval()
+    lpips_model = _get_lpips_model(device)
     with torch.no_grad():
         original = original.clamp(0, 1).float()
         generated = generated.clamp(0, 1).float()
@@ -141,19 +124,20 @@ def plot_reconstructions(target_img, pred_img, all_imgs, one_hot_input_mod,
     """
     labels = ['pd', 't1', 't2'] if dataset_name == 'ixi' else ['t1', 't1ce', 't2', 'flair']
 
-    # Move to CPU and select first 3 samples
-    target_img         = target_img.detach().cpu()[:3]
-    pred_img           = pred_img.detach().cpu()[:3]
-    all_imgs           = all_imgs.detach().cpu()[:3]
-    one_hot_input_mod  = one_hot_input_mod.detach().cpu()[:3]
-    one_hot_target_mod = one_hot_target_mod.detach().cpu()[:3]
+    # Move to CPU and select up to 3 samples (fewer if the batch itself is smaller)
+    n_plot = min(3, target_img.shape[0])
+    target_img         = target_img.detach().cpu()[:n_plot]
+    pred_img           = pred_img.detach().cpu()[:n_plot]
+    all_imgs           = all_imgs.detach().cpu()[:n_plot]
+    one_hot_input_mod  = one_hot_input_mod.detach().cpu()[:n_plot]
+    one_hot_target_mod = one_hot_target_mod.detach().cpu()[:n_plot]
 
     num_inputs = all_imgs.shape[1] if all_imgs.ndim == 4 else 1
     num_cols   = num_inputs + 2  # inputs + target + prediction
 
-    fig, axes = plt.subplots(nrows=3, ncols=num_cols, figsize=(3 * num_cols, 9))
+    fig, axes = plt.subplots(nrows=n_plot, ncols=num_cols, figsize=(3 * num_cols, 3 * n_plot), squeeze=False)
 
-    for i in range(3):
+    for i in range(n_plot):
         target_label = labels[one_hot_target_mod[i].argmax()]
         input_labels = [l for j, l in enumerate(labels) if j != one_hot_target_mod[i].argmax()]
 
@@ -231,8 +215,8 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, config, dataset
     mse_loss = nn.MSELoss()
     
     # Rectified Flow parameters
-    eps = config['flow']['eps']
-    T = config['flow']['T']
+    eps = config['training']['eps']
+    T = config['training']['T']
     step = 0
 
     pbar = tqdm(dataloader, desc=f"Train Epoch {epoch+1}")
@@ -268,8 +252,8 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, config, dataset
 
         # Predict velocity
         pred_velocity = model(
-            x=perturbed_data, 
-            t=t * config['flow']['t_scale'],
+            x=perturbed_data,
+            t=t * config['training']['t_scale'],
             y=all_input_latent_z,
             one_hot_target_modality=one_hot_target_mod,
             input_imgs_mods=input_imgs_mods
@@ -287,7 +271,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, config, dataset
         pbar.set_postfix(loss=loss.item())
 
         # Periodic logging
-        if step % config['logging']['print_every'] == 0 or step == 1:
+        if step % config['training']['print_interval'] == 0 or step == 1:
             print(f'Time: {datetime.now().strftime("%Y%m%d-%H%M")}, Epoch: {epoch}, '
                   f'Avg Loss: {total_loss / step:.4f}, Step: {step}')
 
@@ -311,9 +295,9 @@ def validate(model, dataloader, device, epoch, config, save_dir, dataset_name='b
     model.eval()
     total_loss = 0.0
     mse_loss = nn.MSELoss()
-    
-    eps = config['flow']['eps']
-    T = config['flow']['T']
+
+    eps = config['training']['eps']
+    T = config['training']['T']
     step = 0
 
     # Select ODE solver
@@ -346,8 +330,8 @@ def validate(model, dataloader, device, epoch, config, save_dir, dataset_name='b
 
         with torch.amp.autocast(device_type='cuda'):
             pred_velocity = model(
-                x=perturbed_data, 
-                t=t * config['flow']['t_scale'],
+                x=perturbed_data,
+                t=t * config['training']['t_scale'],
                 y=all_input_latent_z,
                 one_hot_target_modality=one_hot_target_mod,
                 input_imgs_mods=input_imgs_mods
@@ -477,8 +461,8 @@ def train(config):
         start_epoch = checkpoint['epoch']
         best_loss = checkpoint['best_loss']
         print(f'\n\nCONTINUING TRAINING from epoch {start_epoch}\n\n')
-        
-        if config['training']['resume_from_epoch_0']:
+
+        if config['training']['reset_epoch']:
             start_epoch = 0
             best_loss = float('inf')
 
@@ -512,9 +496,10 @@ def train(config):
         pin_memory=True
     )
 
-    # Create output directories
-    save_dir = config['output']['validation_dir'].format(dataset=dataset_name)
-    model_save_path = config['output']['checkpoint_dir'].format(dataset=dataset_name)
+    # Create output directories (one subdirectory per dataset, so the pretrained
+    # checkpoints/brats.pth and checkpoints/ixi.pth are never overwritten)
+    save_dir = os.path.join(config['paths']['validation_outputs'], dataset_name)
+    model_save_path = os.path.join(config['paths']['checkpoints'], dataset_name)
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(model_save_path, exist_ok=True)
 
@@ -541,7 +526,7 @@ def train(config):
         print(f'Train loss: {train_loss:.4f}')
 
         # Validate
-        if epoch % config['training']['validate_every'] == 0:
+        if epoch % config['training']['validate_interval'] == 0:
             val_loss = validate(
                 model, val_dataloader, device, epoch, config, save_dir, dataset_name
             )
@@ -551,8 +536,8 @@ def train(config):
 
         # Save checkpoints
         best_loss = save_model(
-            model, val_loss, model_save_path, epoch, optimizer, best_loss, 
-            save_every=config['training']['save_every']
+            model, val_loss, model_save_path, epoch, optimizer, best_loss,
+            save_every=config['training']['save_interval']
         )
 
         scheduler.step()
