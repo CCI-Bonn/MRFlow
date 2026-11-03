@@ -467,7 +467,7 @@ def evaluate(
             )
 
             # Compute LPIPS (requires GPU)
-            lpips_score = lpips_loss(single_pred_01.to(device), single_target.to(device)).mean()
+            lpips_score = lpips_loss(single_pred_01.to(device), single_target.to(device), normalize=True).mean()
             avg_lpips.append(lpips_score.detach().cpu().item())
 
             # Move to CPU for other metrics
